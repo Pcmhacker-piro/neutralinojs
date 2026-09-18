@@ -2,6 +2,7 @@
 #include <regex>
 #include <vector>
 #include <filesystem>
+#include <algorithm>
 
 #include <websocketpp/server.hpp>
 
@@ -380,14 +381,15 @@ router::Response getAsset(string path, const string &prependData, const fs::File
                 if(resources::isDirMode()) {
                     namespace fs_path = std::filesystem;
                     try {
-                        auto canonicalMount = fs_path::weakly_canonical(mountTarget + "/");
+                        auto canonicalMount = fs_path::weakly_canonical(mountTarget);
                         auto canonicalTarget = fs_path::weakly_canonical(adjustedPath);
-                        string mountStr = canonicalMount.string();
-                        string targetStr = canonicalTarget.string();
-                        if(!mountStr.empty() && mountStr.back() != '/') {
-                            mountStr += '/';
-                        }
-                        if(targetStr.find(mountStr) != 0 && targetStr != canonicalMount.string()) {
+
+                        auto [mountEnd, _] = std::mismatch(
+                            canonicalMount.begin(), canonicalMount.end(),
+                            canonicalTarget.begin(), canonicalTarget.end()
+                        );
+
+                        if (mountEnd != canonicalMount.end()) {
                             response.status = websocketpp::http::status_code::forbidden;
                             response.contentType = "text/plain";
                             response.data = "Forbidden";
@@ -482,33 +484,26 @@ router::Response serve(string path, const fs::FileReaderOptions &fileReaderOptio
     string documentRoot = neuserver::getDocumentRoot();
 
     if(resources::isDirMode()) {
-        string fullPath = settings::joinAppPath(path);
-        fs_path::path canonicalRoot;
-        fs_path::path canonicalTarget;
-
         try {
-            canonicalRoot = fs_path::weakly_canonical(
-                settings::joinAppPath(documentRoot.empty() ? "/" : documentRoot + "/"));
-            canonicalTarget = fs_path::weakly_canonical(fullPath);
+            fs_path::path canonicalRoot = fs_path::weakly_canonical(
+                settings::joinAppPath(documentRoot.empty() ? "/" : documentRoot));
+            fs_path::path canonicalTarget = fs_path::weakly_canonical(
+                settings::joinAppPath(path));
+
+            auto [rootEnd, _] = std::mismatch(
+                canonicalRoot.begin(), canonicalRoot.end(),
+                canonicalTarget.begin(), canonicalTarget.end()
+            );
+
+            if (rootEnd != canonicalRoot.end()) {
+                return router::Response {
+                    websocketpp::http::status_code::forbidden,
+                    "text/plain",
+                    "Forbidden"
+                };
+            }
         }
         catch(const exception& e) {
-            return router::Response {
-                websocketpp::http::status_code::forbidden,
-                "text/plain",
-                "Forbidden"
-            };
-        }
-
-        string rootStr = canonicalRoot.string();
-        string targetStr = canonicalTarget.string();
-
-        // Ensure the root path ends with a separator for proper prefix matching
-        if(!rootStr.empty() && rootStr.back() != '/') {
-            rootStr += '/';
-        }
-
-        // The target must start with the root path (i.e., stay inside document root)
-        if(targetStr.find(rootStr) != 0 && targetStr != canonicalRoot.string()) {
             return router::Response {
                 websocketpp::http::status_code::forbidden,
                 "text/plain",
