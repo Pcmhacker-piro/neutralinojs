@@ -400,4 +400,13 @@ describe('window.spec: window namespace tests', () => {
         });
     });
 
+    describe('window.emitDropEvents', () => {
+        it('starts window with --window-emit-drop-events=true without errors', async () => {
+            runner.run(`
+                await __close('done');
+            `, {args: '--window-emit-drop-events=true'});
+            assert.equal(runner.getOutput(), 'done');
+        });
+    });
+
 });
