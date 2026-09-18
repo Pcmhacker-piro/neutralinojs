@@ -13,11 +13,9 @@ Neutralino.events.on("ready", async () => {
 });
 
 async function __close(data = "", exitCode = 0) {
-    if(data) {
-        try {
-            await Neutralino.filesystem.writeFile(NL_PATH + "/.tmp/output.txt", data);
-        } catch(e) {}
-    }
+    try {
+        await Neutralino.filesystem.writeFile(NL_PATH + "/.tmp/output.txt", (data !== null && data !== undefined) ? String(data) : "");
+    } catch(e) {}
     setTimeout(async () => {
         await Neutralino.app.exit(exitCode); // normal exit
     }, 2000);
