@@ -375,6 +375,33 @@ router::Response getAsset(string path, const string &prependData, const fs::File
         for(const auto& [mountedPath, mountTarget] : mountedPaths) {
             if(pathname.find(mountedPath) == 0) {
                 string adjustedPath = mountTarget + "/" + pathname.substr(mountedPath.length());
+
+                // Validate mounted path doesn't escape the mount target (issue #1846)
+                if(resources::isDirMode()) {
+                    namespace fs_path = std::filesystem;
+                    try {
+                        auto canonicalMount = fs_path::weakly_canonical(mountTarget + "/");
+                        auto canonicalTarget = fs_path::weakly_canonical(adjustedPath);
+                        string mountStr = canonicalMount.string();
+                        string targetStr = canonicalTarget.string();
+                        if(!mountStr.empty() && mountStr.back() != '/') {
+                            mountStr += '/';
+                        }
+                        if(targetStr.find(mountStr) != 0 && targetStr != canonicalMount.string()) {
+                            response.status = websocketpp::http::status_code::forbidden;
+                            response.contentType = "text/plain";
+                            response.data = "Forbidden";
+                            return response;
+                        }
+                    }
+                    catch(const exception& e) {
+                        response.status = websocketpp::http::status_code::forbidden;
+                        response.contentType = "text/plain";
+                        response.data = "Forbidden";
+                        return response;
+                    }
+                }
+
                 fileReaderResult = fs::readFile(adjustedPath, fileReaderOptions);
                 foundMountedPath = true;
                 break;
@@ -447,6 +474,48 @@ router::Response serve(string path, const fs::FileReaderOptions &fileReaderOptio
 
     // Ignore query params
     path = path.substr(0, path.find("?"));
+
+    // Sanitize path to prevent directory traversal (issue #1846)
+    // Canonicalize the URL path by resolving ".." and "." segments,
+    // then verify the result stays within the document root.
+    namespace fs_path = std::filesystem;
+    string documentRoot = neuserver::getDocumentRoot();
+
+    if(resources::isDirMode()) {
+        string fullPath = settings::joinAppPath(path);
+        fs_path::path canonicalRoot;
+        fs_path::path canonicalTarget;
+
+        try {
+            canonicalRoot = fs_path::weakly_canonical(
+                settings::joinAppPath(documentRoot.empty() ? "/" : documentRoot + "/"));
+            canonicalTarget = fs_path::weakly_canonical(fullPath);
+        }
+        catch(const exception& e) {
+            return router::Response {
+                websocketpp::http::status_code::forbidden,
+                "text/plain",
+                "Forbidden"
+            };
+        }
+
+        string rootStr = canonicalRoot.string();
+        string targetStr = canonicalTarget.string();
+
+        // Ensure the root path ends with a separator for proper prefix matching
+        if(!rootStr.empty() && rootStr.back() != '/') {
+            rootStr += '/';
+        }
+
+        // The target must start with the root path (i.e., stay inside document root)
+        if(targetStr.find(rootStr) != 0 && targetStr != canonicalRoot.string()) {
+            return router::Response {
+                websocketpp::http::status_code::forbidden,
+                "text/plain",
+                "Forbidden"
+            };
+        }
+    }
 
     bool isClientLibrary = regex_match(path, regex(".*neutralino.js$"));
     bool isGlobalsRequest = regex_match(path, regex(".*__neutralino_globals.js$"));
